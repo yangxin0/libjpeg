@@ -17,6 +17,7 @@
 #ifndef HAVE_STDLIB_H		/* <stdlib.h> should declare malloc() */
 extern void * malloc ();
 #endif
+#include <stdlib.h>
 #include <ctype.h>		/* to declare isupper(), tolower() */
 #ifdef USE_SETMODE
 #include <fcntl.h>		/* to declare setmode()'s parameter macros */
