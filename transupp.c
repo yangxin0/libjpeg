@@ -183,6 +183,39 @@ do_flip_v (j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
 
 
 LOCAL(void)
+do_transform(j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
+             jvirt_barray_ptr *src_coef_arrays,
+             jvirt_barray_ptr *dst_coef_arrays, JDIMENSION xoffs,
+             JDIMENSION yoffs)
+/* transform src_coef_arrays so that the xoffs,yoffs (rounded to an even
+ * dct block) are the new origin of the image.  copy rather than move because
+ * I'd never finish if I tried to understand the byzantine memory management.
+ */
+{
+  int ci;
+  jpeg_component_info *compptr;
+  JBLOCKARRAY src_buffer, dst_buffer;
+  JDIMENSION dst_blk_x, dst_blk_y;
+
+  xoffs /= dstinfo->max_h_samp_factor * DCTSIZE;
+  yoffs /= dstinfo->max_v_samp_factor * DCTSIZE;
+
+  for (ci = 0; ci < dstinfo->num_components; ci++) {
+    compptr = dstinfo->comp_info + ci;
+    for (dst_blk_y = 0; dst_blk_y < compptr->height_in_blocks; dst_blk_y++) {
+      dst_buffer = (*srcinfo->mem->access_virt_barray)(
+          (j_common_ptr)srcinfo, dst_coef_arrays[ci], dst_blk_y, 1, TRUE);
+      src_buffer = (*srcinfo->mem->access_virt_barray)(
+          (j_common_ptr)srcinfo, src_coef_arrays[ci],
+          dst_blk_y + yoffs * compptr->v_samp_factor, 1, FALSE);
+      jcopy_block_row(&src_buffer[0][xoffs * compptr->h_samp_factor],
+                      dst_buffer[0], compptr->width_in_blocks);
+    }
+  }
+}
+
+
+LOCAL(void)
 do_transpose (j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
 	      jvirt_barray_ptr *src_coef_arrays,
 	      jvirt_barray_ptr *dst_coef_arrays)
@@ -587,6 +620,7 @@ jtransform_request_workspace (j_decompress_ptr srcinfo,
   case JXFORM_FLIP_H:
     /* Don't need a workspace array */
     break;
+  case JXFORM_CUT:
   case JXFORM_FLIP_V:
   case JXFORM_ROT_180:
     /* Need workspace arrays having same dimensions as source image.
@@ -716,6 +750,81 @@ trim_bottom_edge (j_compress_ptr dstinfo)
     dstinfo->image_height = MCU_rows * (max_v_samp_factor * DCTSIZE);
 }
 
+/* For cropping, realize and constrain the target area, and reshape the
+ * dstinfo to hold the resulting image.
+ *
+ * Input was supplied as WxH[+-]X[+-]Y offsets.  Negative offsets are
+ * relative to the lower righthand corner of the image.  The region is
+ * expanded so that all boundaries fall on even MCU blocks by rounding
+ * the offsets *down* (at the do_transform() step) and the size *up*.
+ */
+LOCAL(void)
+set_dest_size(j_compress_ptr dstinfo, jpeg_transform_info *info) {
+  int ci, max_samp_factor;
+  JDIMENSION MCU_size, newsize, offset, factor;
+
+  /* Initially the dstinfo is the same size as the srcinfo.
+   * Use it to constrain the offsets:
+   */
+  if (info->new_x < 0)
+    info->new_x += dstinfo->image_width;
+  if (info->new_y < 0)
+    info->new_y += dstinfo->image_height;
+  if (info->new_x < 0 || info->new_x >= dstinfo->image_width ||
+      info->new_y < 0 || info->new_y >= dstinfo->image_height) {
+    fprintf(stderr, "-cut offsets fall outside source image\n");
+    exit(EXIT_FAILURE);
+  }
+
+  /* use it to constrain the size: */
+  if (info->new_w + info->new_x > dstinfo->image_width)
+    info->new_w = dstinfo->image_width - info->new_x;
+  if (info->new_h + info->new_y > dstinfo->image_height)
+    info->new_h = dstinfo->image_height - info->new_y;
+
+  /* We have to compute max_v/h_samp_factors ourselves,
+   * because it hasn't been set yet in the destination
+   * (and we don't want to use the source's value).
+   */
+  max_samp_factor = 1;
+  for (ci = 0; ci < dstinfo->num_components; ci++) {
+    int samp_factor = dstinfo->comp_info[ci].v_samp_factor;
+    max_samp_factor = MAX(max_samp_factor, samp_factor);
+  }
+  /* Find original (rounded down) and new (rounded up) heights in full
+   * dct blocks, choose the smaller of the two.
+   */
+  factor = max_samp_factor * DCTSIZE;
+  MCU_size = dstinfo->image_height / factor;
+  newsize = (info->new_h + (info->new_y % factor) + factor - 1) / factor;
+  MCU_size = MIN(MCU_size, newsize);
+  if (MCU_size > 0) /* can't trim to 0 pixels */
+    dstinfo->image_height = MCU_size * factor;
+  else {
+    fprintf(stderr, "degenerate -cut height\n");
+    exit(EXIT_FAILURE);
+  }
+
+  max_samp_factor = 1;
+  for (ci = 0; ci < dstinfo->num_components; ci++) {
+    int samp_factor = dstinfo->comp_info[ci].h_samp_factor;
+    max_samp_factor = MAX(max_samp_factor, samp_factor);
+  }
+  /* Find original (rounded down) and new (rounded up) heights in full
+   * dct blocks, choose the smaller of the two.
+   */
+  factor = max_samp_factor * DCTSIZE;
+  MCU_size = dstinfo->image_width / factor;
+  newsize = (info->new_w + (info->new_x % factor) + factor - 1) / factor;
+  MCU_size = MIN(MCU_size, newsize);
+  if (MCU_size > 0) /* can't trim to 0 pixels */
+    dstinfo->image_width = MCU_size * factor;
+  else {
+    fprintf(stderr, "degenerate -cut width\n");
+    exit(EXIT_FAILURE);
+  }
+}
+
 
 /* Adjust output image parameters as needed.
  *
@@ -761,6 +870,9 @@ jtransform_adjust_parameters (j_decompress_ptr srcinfo,
   switch (info->transform) {
   case JXFORM_NONE:
     /* Nothing to do */
+    break;
+  case JXFORM_CUT:
+    set_dest_size(dstinfo, info);
     break;
   case JXFORM_FLIP_H:
     if (info->trim)
@@ -826,6 +938,9 @@ jtransform_execute_transformation (j_decompress_ptr srcinfo,
   switch (info->transform) {
   case JXFORM_NONE:
     break;
+  case JXFORM_CUT:
+     do_transform(srcinfo, dstinfo, src_coef_arrays, dst_coef_arrays, info->new_x, info->new_y);
+     break;
   case JXFORM_FLIP_H:
     do_flip_h(srcinfo, dstinfo, src_coef_arrays);
     break;

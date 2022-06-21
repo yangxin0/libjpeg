@@ -14,6 +14,8 @@
 #include "cdjpeg.h"		/* Common decls for cjpeg/djpeg applications */
 #include "transupp.h"		/* Support routines for jpegtran */
 #include "jversion.h"		/* for version message */
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifdef USE_CCOMMAND		/* command-line reader for Macintosh */
 #ifdef __MWERKS__
@@ -70,6 +72,7 @@ usage (void)
   fprintf(stderr, "  -transpose     Transpose image\n");
   fprintf(stderr, "  -transverse    Transverse transpose image\n");
   fprintf(stderr, "  -trim          Drop non-transformable edge blocks\n");
+  fprintf(stderr, "  -cut WxH+X+Y   Cut out a subset of the image\n");
 #endif /* TRANSFORMS_SUPPORTED */
   fprintf(stderr, "Switches for advanced users:\n");
   fprintf(stderr, "  -restart N     Set restart interval in rows, or in blocks with B\n");
@@ -184,7 +187,25 @@ parse_switches (j_compress_ptr cinfo, int argc, char **argv,
 	printed_version = TRUE;
       }
       cinfo->err->trace_level++;
+    } else if (keymatch(arg, "cut", 1)) {
+        /* Cut out a region of the image */
+        char *p;
 
+        if (++argn >= argc) usage();
+        select_transform(JXFORM_CUT);
+        p = argv[argn];
+        transformoption.new_w = strtol(p, &p, 10);
+        if (*p++ != 'x') usage();
+        transformoption.new_h = strtol(p, &p, 10);
+        if (*p != '+' && *p != '-') usage();
+        transformoption.new_x = strtol(p, &p, 10);
+        if (*p != '+' && *p != '-') usage();
+        transformoption.new_y = strtol(p, &p, 10);
+
+        if (!transformoption.new_w || !transformoption.new_h) {
+            fprintf(stderr, "%s: degenerate -cut size in %s\n", progname, argv[argn]);
+            exit(EXIT_FAILURE);
+        }
     } else if (keymatch(arg, "flip", 1)) {
       /* Mirror left-right or top-bottom. */
       if (++argn >= argc)	/* advance to next argument */

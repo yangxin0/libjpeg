@@ -39,6 +39,7 @@
 
 typedef enum {
 	JXFORM_NONE,		/* no transformation */
+    JXFORM_CUT,         /* cut out part of image */
 	JXFORM_FLIP_H,		/* horizontal flip */
 	JXFORM_FLIP_V,		/* vertical flip */
 	JXFORM_TRANSPOSE,	/* transpose across UL-to-LR axis */
@@ -88,6 +89,8 @@ typedef struct {
   JXFORM_CODE transform;	/* image transform operator */
   boolean trim;			/* if TRUE, trim partial MCUs as needed */
   boolean force_grayscale;	/* if TRUE, convert color image to grayscale */
+  JDIMENSION new_x, new_y;
+  JDIMENSION new_w, new_h;
 
   /* Internal workspace: caller should not touch these */
   int num_components;		/* # of components in workspace */
