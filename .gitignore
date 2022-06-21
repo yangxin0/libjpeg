@@ -1,0 +1,10 @@
+*.o
+Makefile
+cjpeg
+compile_commands.json
+djpeg
+jconfig.h
+jpegtran
+libjpeg.a
+rdjpgcom
+wrjpgcom
