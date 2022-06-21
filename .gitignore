@@ -9,3 +9,4 @@ libjpeg.a
 rdjpgcom
 wrjpgcom
 /.vscode/
+/.cache/
